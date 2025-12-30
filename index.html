@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="UTF-8">
+<title>Απογραφή Προϊόντων</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+body{font-family:Arial;background:#f4f4f4;padding:10px}
+h1{text-align:center}
+#scanner{width:100%;height:300px;background:#000;margin-bottom:10px}
+input,select,button{width:100%;padding:8px;margin:4px 0}
+table{width:100%;border-collapse:collapse;background:#fff}
+th,td{border:1px solid #ccc;padding:6px;text-align:center;font-size:13px}
+th{background:#eee}
+@media print{#scanner,input,button{display:none}}
+</style>
+</head>
+<body>
+<h1>📦 Απογραφή Προϊόντων</h1>
+
+<button id="startScannerBtn">📷 Start Scanner</button>
+<div id="scanner"></div>
+
+<input id="search" placeholder="🔍 Αναζήτηση" onkeyup="updateTable()">
+<select id="categoryFilter" onchange="updateTable()">
+<option value="">📂 Όλες οι κατηγορίες</option>
+</select>
+<button onclick="exportExcel()">📊 Export Excel</button>
+<button onclick="window.print()">🖨 Εκτύπωση</button>
+
+<table>
+<thead>
+<tr>
+<th>Barcode / QR</th>
+<th>Όνομα</th>
+<th>Κατηγορία</th>
+<th>Ποσ.</th>
+<th>+</th>
+<th>-</th>
+</tr>
+</thead>
+<tbody id="productTable"></tbody>
+</table>
+
+<script>
+let products = JSON.parse(localStorage.getItem("products")) || {};
+let lastScan = null;
+let scannerInstance = null;
+
+function save(){ localStorage.setItem("products", JSON.stringify(products)); }
+
+function updateCategories(){
+  const sel = document.getElementById("categoryFilter");
+  const current = sel.value;
+  const cats = [...new Set(Object.values(products).map(p=>p.category))];
+  sel.innerHTML='<option value="">📂 Όλες</option>';
+  cats.forEach(c=>sel.innerHTML+=`<option ${c===current?"selected":""}>${c}</option>`);
+}
+
+function updateTable(){
+  const s = document.getElementById("search").value.toLowerCase();
+  const f = document.getElementById("categoryFilter").value;
+  const tb = document.getElementById("productTable");
+  tb.innerHTML="";
+  for(let c in products){
+    const p = products[c];
+    if((!f||p.category===f) && (p.name.toLowerCase().includes(s)||c.includes(s))){
+      tb.innerHTML += `<tr>
+<td>${c}</td>
+<td>${p.name}</td>
+<td>${p.category}</td>
+<td>${p.qty}</td>
+<td><button onclick="chg('${c}',1)">+</button></td>
+<td><button onclick="chg('${c}',-1)">-</button></td>
+</tr>`;
+    }
+  }
+  updateCategories();
+}
+
+function chg(code,v){
+  products[code].qty = Math.max(0, products[code].qty + v);
+  save(); updateTable();
+}
+
+// ΠΡΟΣΠΑΘΕΙΑ ΝΑ ΠΑΡΕΙ ΟΝΟΜΑ ΑΠΟ ΟΠΟΙΑΔΗΠΟΤΕ ΒΑΣΗ
+async function getName(code){
+  // OpenFoodFacts
+  try{
+    const r = await fetch(`https://world.openfoodfacts.org/api/v0/product/${code}.json`);
+    const d = await r.json();
+    if(d.status==1 && d.product.product_name) return d.product.product_name;
+  }catch(e){}
+  return null; // fallback manual
+}
+
+async function addProduct(code){
+  if(code === lastScan) return;
+  lastScan = code;
+  setTimeout(()=>lastScan=null,1500);
+
+  if(products[code]){
+    products[code].qty++;
+  } else {
+    let name = await getName(code);
+    if(!name) name = prompt("Όνομα προϊόντος:") || "Χωρίς Όνομα";
+    let cat = prompt("Κατηγορία:") || "Χωρίς κατηγορία";
+    products[code] = { name, category: cat, qty: 1 };
+  }
+  save(); updateTable();
+}
+
+function exportExcel(){
+  const d=[["Code","Όνομα","Κατηγορία","Ποσότητα"]];
+  for(let c in products) d.push([c,products[c].name,products[c].category,products[c].qty]);
+  const ws=XLSX.utils.aoa_to_sheet(d);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Απογραφή");
+  XLSX.writeFile(wb,"apografi.xlsx");
+}
+
+document.getElementById("startScannerBtn").addEventListener("click", async ()=>{
+  const target = document.getElementById("scanner");
+  target.innerHTML="";
+
+  if('BarcodeDetector' in window){
+    const video = document.createElement("video");
+    video.setAttribute("playsinline",true);
+    video.style.width="100%";
+    target.appendChild(video);
+
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      video.srcObject = stream;
+      await video.play();
+
+      const detector = new BarcodeDetector({formats:["qr_code","ean_13","ean_8","code_128","upc_a","upc_e"]});
+      const loop = async ()=>{
+        try{
+          const codes = await detector.detect(video);
+          codes.forEach(c=>addProduct(c.rawValue));
+        }catch(e){}
+        requestAnimationFrame(loop);
+      };
+      loop();
+    }catch(e){ alert("❌ Δεν δόθηκε άδεια κάμερας ή σφάλμα: "+e);}
+    return;
+  }
+
+  if(scannerInstance) return;
+  scannerInstance = new Html5Qrcode("scanner");
+  await scannerInstance.start({facingMode:"environment"},{fps:10,qrbox:250}, txt=>addProduct(txt));
+});
+
+updateTable();
+</script>
+</body>
+</html>
