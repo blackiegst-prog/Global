@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Inventory Scanner</title>
+    
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #2563eb;
+            --secondary: #64748b;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --dark: #1e293b;
+            --light: #f8fafc;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f1f5f9;
+            margin: 0;
+            padding: 20px;
+            color: var(--dark);
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        #reader {
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            border: none !important;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: opacity 0.2s;
+        }
+
+        .btn-export { background-color: var(--success); color: white; }
+        .btn-print { background-color: var(--secondary); color: white; }
+        .btn-clear { background-color: var(--danger); color: white; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th {
+            background-color: var(--light);
+            text-align: left;
+            padding: 12px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .qty-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .qty-btn {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            border-radius: 50%;
+            background: #e2e8f0;
+        }
+
+        .barcode-text {
+            font-family: monospace;
+            font-weight: bold;
+            color: var(--primary);
+        }
+
+        @media print {
+            .no-print { display: none; }
+            .card { box-shadow: none; border: 1px solid #ddd; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1><i class="fas fa-boxes"></i> Απογραφή Αποθήκης</h1>
+    </header>
+
+    <div class="card no-print">
+        <div id="reader"></div>
+        <div id="result-message" style="text-align:center; margin-top:10px; font-weight:bold;"></div>
+    </div>
+
+    <div class="controls no-print">
+        <button class="btn-export" onclick="exportToExcel()"><i class="fas fa-file-excel"></i> Εξαγωγή Excel</button>
+        <button class="btn-print" onclick="window.print()"><i class="fas fa-print"></i> Εκτύπωση</button>
+        <button class="btn-clear" onclick="clearAll()"><i class="fas fa-trash"></i> Καθαρισμός</button>
+    </div>
+
+    <div class="card">
+        <h3>Λίστα Προϊόντων</h3>
+        <table id="inventoryTable">
+            <thead>
+                <tr>
+                    <th>Barcode</th>
+                    <th>Ποσότητα</th>
+                    <th class="no-print">Ενέργειες</th>
+                </tr>
+            </thead>
+            <tbody id="inventoryBody">
+                </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    let inventory = JSON.parse(localStorage.getItem('inventory')) || [];
+
+    // Initialize Scanner
+    function onScanSuccess(decodedText, decodedResult) {
+        addItem(decodedText);
+        // Beep or visual feedback
+        document.getElementById('result-message').innerHTML = `Σκαναρίστηκε: ${decodedText}`;
+        document.getElementById('result-message').style.color = "green";
+        setTimeout(() => { document.getElementById('result-message').innerHTML = ""; }, 2000);
+    }
+
+    const html5QrcodeScanner = new Html5QrcodeScanner(
+        "reader", { fps: 10, qrbox: 250 }
+    );
+    html5QrcodeScanner.render(onScanSuccess);
+
+    // Core Logic
+    function addItem(barcode) {
+        const index = inventory.findIndex(item => item.barcode === barcode);
+        
+        if (index > -1) {
+            inventory[index].quantity += 1;
+        } else {
+            inventory.push({ barcode: barcode, quantity: 1 });
+        }
+        saveAndRender();
+    }
+
+    function updateQty(index, delta) {
+        inventory[index].quantity += delta;
+        if (inventory[index].quantity < 0) inventory[index].quantity = 0;
+        saveAndRender();
+    }
+
+    function deleteItem(index) {
+        if(confirm('Διαγραφή προϊόντος;')) {
+            inventory.splice(index, 1);
+            saveAndRender();
+        }
+    }
+
+    function saveAndRender() {
+        localStorage.setItem('inventory', JSON.stringify(inventory));
+        renderTable();
+    }
+
+    function renderTable() {
+        const tbody = document.getElementById('inventoryBody');
+        tbody.innerHTML = '';
+
+        inventory.forEach((item, index) => {
+            const row = `
+                <tr>
+                    <td class="barcode-text">${item.barcode}</td>
+                    <td>
+                        <div class="qty-controls">
+                            <button class="qty-btn no-print" onclick="updateQty(${index}, -1)">-</button>
+                            <span>${item.quantity}</span>
+                            <button class="qty-btn no-print" onclick="updateQty(${index}, 1)">+</button>
+                        </div>
+                    </td>
+                    <td class="no-print">
+                        <button class="btn-clear" style="padding: 5px 10px;" onclick="deleteItem(${index})">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+            tbody.innerHTML += row;
+        });
+    }
+
+    // Export & Utilities
+    function exportToExcel() {
+        const ws = XLSX.utils.json_to_sheet(inventory);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+        XLSX.writeFile(wb, "Apografi_Warehouse.xlsx");
+    }
+
+    function clearAll() {
+        if(confirm('ΠΡΟΣΟΧΗ! Θέλετε να διαγράψετε όλη την απογραφή;')) {
+            inventory = [];
+            saveAndRender();
+        }
+    }
+
+    // Initial Load
+    renderTable();
+</script>
+
+</body>
+</html>
